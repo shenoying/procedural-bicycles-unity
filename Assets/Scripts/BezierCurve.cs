@@ -25,15 +25,17 @@ public class BezierCurve
 
     public Vector3 GetPoint(float t)
     {
+        if (t < 0.0f || t > 1.0f) return Vector3.zero;
+        SplineUtils.SetSplineType(SplineUtils.SplineTypes.CUBIC_BEZIER);
         Vector3[] section = new Vector3[] {pOne, pTwo, pThree, pFour};
-
         return SplineUtils.GetPoint(t, section);
     }
 
     public Vector3 GetTangent(float t)
     {
+        if (t < 0.0f || t > 1.0f) return Vector3.zero;
+        SplineUtils.SetSplineType(SplineUtils.SplineTypes.CUBIC_BEZIER);
         Vector3[] section = new Vector3[] {pOne, pTwo, pThree, pFour};
-
         return SplineUtils.GetTangent(t, section);    
     }
 

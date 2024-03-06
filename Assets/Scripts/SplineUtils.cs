@@ -38,6 +38,26 @@ public static class SplineUtils
         new Vector4(0.0f,  0.0f,  -0.5f,  0.5f)
     );
 
+    public static readonly Matrix4x4 catmullRomTangent = new Matrix4x4 (
+        new Vector4(-0.5f,  2.0f, -1.5f, 0.0f),
+        new Vector4( 0.0f, -5.0f,  4.5f, 0.0f),
+        new Vector4( 0.5f,  4.0f, -4.5f, 0.0f),
+        new Vector4( 0.0f, -1.0f,  1.5f, 0.0f)
+    );
+
+    public static readonly Matrix4x4 catmullRomNormal = new Matrix4x4 (
+        new Vector4( 2.0f, -3.0f, 0.0f, 0.0f),
+        new Vector4(-5.0f,  9.0f, 0.0f, 0.0f),
+        new Vector4( 4.0f, -9.0f, 0.0f, 0.0f),
+        new Vector4(-1.0f,  3.0f, 0.0f, 0.0f)
+    );
+
+    public static readonly Matrix4x4 catmullRomBinormal = new Matrix4x4 (
+        new Vector4(-3.0f, 0.0f, 0.0f, 0.0f),
+        new Vector4( 9.0f, 0.0f, 0.0f, 0.0f),
+        new Vector4(-9.0f, 0.0f, 0.0f, 0.0f),
+        new Vector4( 3.0f, 0.0f, 0.0f, 0.0f)
+    );
 
     public static readonly Matrix4x4 bSplineBasis = new Matrix4x4 (
         new Vector4(1.0f / 6.0f, -0.5f,  0.5f, -1.0f / 6.0f),
@@ -324,41 +344,69 @@ public static class SplineUtils
         return point;
     }
 
-    public static Vector3 GetTangent(float t, Vector3[] section)
-    {        
-        if (section is null || section.Length != 4) return Vector3.zero;
-
-        Vector4 tM = new Vector4(0.0f, 1.0f, 2.0f*t , 3.0f*t*t);
-        return ComputeTMGMatrix(tM, section);
-    }
-
     public static Vector3 GetPoint(float t, Vector3[] section) 
     {
         if (section is null || section.Length != 4) return Vector3.zero;
-
         Vector4 tM = new Vector4(1, t, t*t , t*t*t);
         return ComputeTMGMatrix(tM, section);
     }
 
-    public static Vector3 GetNormal(float t, Vector3[] controlPoints)
+    public static Vector3 GetTangent(float t, Vector3[] section)
     {        
-        if (controlPoints is null || controlPoints.Length < 4) return Vector4.zero;
-        Vector3 tan = GetTangent(t, controlPoints);
-        return NonZeroCrossProduct(tan).normalized;
+        if (section is null || section.Length != 4) return Vector3.zero;
+        if (type == SplineTypes.CATMULL_ROM)
+        {
+            Vector4 tM = new Vector4(1.0f, t, t*t, t*t*t);
+            Vector3[] mg = MultiplyMatrix(catmullRomTangent, section);
+            Vector3 tan = TVecMatMul(tM, mg);
+
+            return tan;
+        }
+        else {
+            float eps = 0.0001f;
+            Vector3 e = (t == 1.0f) ? GetPoint(1.0f, section) : GetPoint(t + eps, section);
+            Vector3 s = (t == 0.0f) ? GetPoint(0.0f, section) : GetPoint(t - eps, section);
+            return (e - s).normalized;
+        }
     }
 
-    public static Vector3 GetBinormal(float t, Vector3[] controlPoints) 
+    public static Vector3 GetNormal(float t, Vector3[] section)
     {        
-        if (controlPoints is null || controlPoints.Length < 4) return Vector4.zero;
-        return Vector3.Cross(GetNormal(t, controlPoints), GetTangent(t, controlPoints)).normalized;
+        if (section is null || section.Length < 4) return Vector4.zero;
+        
+        if (type == SplineTypes.CATMULL_ROM)
+        {
+            Vector4 tM = new Vector4(1.0f, t, t*t, t*t*t);
+            Vector3[] mg = MultiplyMatrix(catmullRomNormal, section);
+            Vector3 tan = TVecMatMul(tM, mg);
+
+            return tan;
+        }
+        else 
+        {
+            float eps = 0.0001f;
+            Vector3 e = (t == 1.0f) ? GetTangent(1.0f, section) : GetTangent(t + eps, section);
+            Vector3 s = (t == 0.0f) ? GetTangent(0.0f, section) : GetTangent(t - eps, section);
+            return (e - s).normalized;
+        }
+        /**
+        Vector3 tan = GetTangent(t, controlPoints);
+        return NonZeroCrossProduct(tan).normalized;
+        **/
+    }
+
+    public static Vector3 GetBinormal(float t, Vector3[] section) 
+    {        
+        if (section is null || section.Length < 4) return Vector4.zero;
+        return Vector3.Cross(GetTangent(t, section), GetNormal(t, section)).normalized;
     }
 
     public static (Vector3 Tangent, Vector3 Normal, Vector3 Binormal) GetFrenetFrame(float t, Vector3[] controlPoints)
     {
         if (controlPoints is null || controlPoints.Length != 4) return (Vector3.zero, Vector3.zero, Vector3.zero);
-        Vector3 tangent  = GetTangent(t, controlPoints).normalized;
-        Vector3 normal   = NonZeroCrossProduct(tangent).normalized;
-        Vector3 binormal = Vector3.Cross(tangent, normal).normalized;
+        Vector3 tangent  = GetTangent(t, controlPoints);
+        Vector3 normal   = GetNormal(t, controlPoints);
+        Vector3 binormal = GetBinormal(t, controlPoints);
         return (tangent, normal, binormal);
     }
 
@@ -367,33 +415,49 @@ public static class SplineUtils
         if (section is null || section.Length != 4) return Vector3.zero;
 
         Matrix4x4 b = GetBasisMatrix();
-        Vector3[] c =  new Vector3[] {
+        Vector3[] c = MultiplyMatrix(b, section); 
+
+        return TVecMatMul(tMatrix, c);
+    }
+
+    static Vector3[] MultiplyMatrix(Matrix4x4 matrix, Vector3[] section)
+    {
+        if (section is null || section.Length != 4) return new Vector3[] {Vector3.zero, Vector3.zero, Vector3.zero, Vector3.zero};
+
+        Vector3[] result =  new Vector3[] {
             new Vector3 (
-                b[0, 0] * section[0].x + b[0, 1] * section[1].x + b[0, 2] * section[2].x + b[0, 3] * section[3].x,
-                b[0, 0] * section[0].y + b[0, 1] * section[1].y + b[0, 2] * section[2].y + b[0, 3] * section[3].y,
-                b[0, 0] * section[0].z + b[0, 1] * section[1].z + b[0, 2] * section[2].z + b[0, 3] * section[3].z
+                matrix[0, 0] * section[0].x + matrix[0, 1] * section[1].x + matrix[0, 2] * section[2].x + matrix[0, 3] * section[3].x,
+                matrix[0, 0] * section[0].y + matrix[0, 1] * section[1].y + matrix[0, 2] * section[2].y + matrix[0, 3] * section[3].y,
+                matrix[0, 0] * section[0].z + matrix[0, 1] * section[1].z + matrix[0, 2] * section[2].z + matrix[0, 3] * section[3].z
             ),
             new Vector3 (
-                b[1, 0] * section[0].x + b[1, 1] * section[1].x + b[1, 2] * section[2].x + b[1, 3] * section[3].x,
-                b[1, 0] * section[0].y + b[1, 1] * section[1].y + b[1, 2] * section[2].y + b[1, 3] * section[3].y,
-                b[1, 0] * section[0].z + b[1, 1] * section[1].z + b[1, 2] * section[2].z + b[1, 3] * section[3].z
+                matrix[1, 0] * section[0].x + matrix[1, 1] * section[1].x + matrix[1, 2] * section[2].x + matrix[1, 3] * section[3].x,
+                matrix[1, 0] * section[0].y + matrix[1, 1] * section[1].y + matrix[1, 2] * section[2].y + matrix[1, 3] * section[3].y,
+                matrix[1, 0] * section[0].z + matrix[1, 1] * section[1].z + matrix[1, 2] * section[2].z + matrix[1, 3] * section[3].z
             ),
             new Vector3 (
-                b[2, 0] * section[0].x + b[2, 1] * section[1].x + b[2, 2] * section[2].x + b[2, 3] * section[3].x,
-                b[2, 0] * section[0].y + b[2, 1] * section[1].y + b[2, 2] * section[2].y + b[2, 3] * section[3].y,
-                b[2, 0] * section[0].z + b[2, 1] * section[1].z + b[2, 2] * section[2].z + b[2, 3] * section[3].z
+                matrix[2, 0] * section[0].x + matrix[2, 1] * section[1].x + matrix[2, 2] * section[2].x + matrix[2, 3] * section[3].x,
+                matrix[2, 0] * section[0].y + matrix[2, 1] * section[1].y + matrix[2, 2] * section[2].y + matrix[2, 3] * section[3].y,
+                matrix[2, 0] * section[0].z + matrix[2, 1] * section[1].z + matrix[2, 2] * section[2].z + matrix[2, 3] * section[3].z
             ),
             new Vector3 (
-                b[3, 0] * section[0].x + b[3, 1] * section[1].x + b[3, 2] * section[2].x + b[3, 3] * section[3].x,
-                b[3, 0] * section[0].y + b[3, 1] * section[1].y + b[3, 2] * section[2].y + b[3, 3] * section[3].y,
-                b[3, 0] * section[0].z + b[3, 1] * section[1].z + b[3, 2] * section[2].z + b[3, 3] * section[3].z
+                matrix[3, 0] * section[0].x + matrix[3, 1] * section[1].x + matrix[3, 2] * section[2].x + matrix[3, 3] * section[3].x,
+                matrix[3, 0] * section[0].y + matrix[3, 1] * section[1].y + matrix[3, 2] * section[2].y + matrix[3, 3] * section[3].y,
+                matrix[3, 0] * section[0].z + matrix[3, 1] * section[1].z + matrix[3, 2] * section[2].z + matrix[3, 3] * section[3].z
             )
         };
 
+        return result;
+    }
+
+    static Vector3 TVecMatMul(Vector4 tMatrix, Vector3[] section)
+    {
+        if (section is null || section.Length != 4) return Vector3.zero;
+
         return new Vector3 (
-            tMatrix.x * c[0].x + tMatrix.y * c[1].x + tMatrix.z * c[2].x + tMatrix.w * c[3].x,
-            tMatrix.x * c[0].y + tMatrix.y * c[1].y + tMatrix.z * c[2].y + tMatrix.w * c[3].y,
-            tMatrix.x * c[0].z + tMatrix.y * c[1].z + tMatrix.z * c[2].z + tMatrix.w * c[3].z
+            tMatrix.x * section[0].x + tMatrix.y * section[1].x + tMatrix.z * section[2].x + tMatrix.w * section[3].x,
+            tMatrix.x * section[0].y + tMatrix.y * section[1].y + tMatrix.z * section[2].y + tMatrix.w * section[3].y,
+            tMatrix.x * section[0].z + tMatrix.y * section[1].z + tMatrix.z * section[2].z + tMatrix.w * section[3].z
         );
     }
 
@@ -409,6 +473,19 @@ public static class SplineUtils
         if (vec == Vector3.zero) return Vector3.zero;
         return Vector3.Cross(vec, new Vector3(vec.x + 0.01f, vec.y - 0.01f, vec.z + 0.01f));
     }
+    
+    /**
+    public static Vector3 NonZeroCrossProduct(Vector3 vector) 
+    {
+        Vector3 cross = Vector3.Cross(vector, Vector3.up).normalized;
+        if (cross.magnitude == 0.0f)
+        {
+            cross = Vector3.right;
+        }
+
+        return cross;
+    }
+    **/
 
     public static Matrix4x4 FrenetFrame(float t, Vector3[] controlPoints)
     {
